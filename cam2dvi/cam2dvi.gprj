@@ -5,8 +5,11 @@
     <Version>5</Version>
     <Device name="GW5AST-138B" pn="GW5AST-LV138FPG676AC1/I0">gw5ast138b-007</Device>
     <FileList>
+        <File path="src/camera_parameters.v" type="file.verilog" enable="1"/>
         <File path="src/cmos_8_16bit.v" type="file.verilog" enable="1"/>
+        <File path="src/ddr3_frame_buffer.v" type="file.verilog" enable="1"/>
         <File path="src/ddr3_memory_interface/DDR3MI_400M.v" type="file.verilog" enable="1"/>
+        <File path="src/distortion_correction.v" type="file.verilog" enable="1"/>
         <File path="src/dvi_tx/DVI_TX_Top.v" type="file.verilog" enable="1"/>
         <File path="src/fifo_top/video_fifo.v" type="file.verilog" enable="1"/>
         <File path="src/gowin_pll/TMDS_PLL_30HZ.v" type="file.verilog" enable="0"/>
