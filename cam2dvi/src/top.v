@@ -1,19 +1,45 @@
 module top #(
     //Note: USE DDR3 with 400MHz: enable file [DDR3MI_400M.v] & [gowin_pll_400M.v], 
     //                            disable [DDR3MI_300M.v] & [gowin_pll_300M.v] (USE 300M Reverse operation)
+
+    //Note: HDMI Output use 1280x720: Set USE_1280 = "true", Enable [TMDS_PLL_xx.v], [TMDS_xxHZ.sdc],
+    //                                Disable Other [TMDS_PLL_*.v], xx is frame rate
+
+    //Note: HDMI Output use 800x600: Set USE_1280 = "false", Enable [TMDS_PLL_800_600_60.v], [TMDS_800_600_60.sdc],
+    //                               Disable Other [TMDS_PLL_*.v] 
+    parameter USE_TPG = "false",
+    parameter USE_1280 = "true"
 )(
-    input                  clk,
+	input                  clk,
 	input                  rst_n,
-	inout                  cmos_scl,       //cmos i2c clock
-	inout                  cmos_sda,       //cmos i2c data
-	input                  cmos_vsync,     //cmos vsync
-	input                  cmos_href,      //cmos hsync refrence,data valid
-	input                  cmos_pclk,      //cmos pxiel clock
-    output                 cmos_xclk,      //cmos externl clock 
-	input  [7:0]           cmos_db,        //cmos data
-	output                 cmos_rst_n,     //cmos reset 
-	output                 cmos_pwdn,      //cmos power down
+
+   
+        output              cmos_scl
+	,   inout               cmos_sda
+	,   input               cmos_pclk
+	,   input               cmos_vsync
+	,   input               cmos_href
+	,   input   [7:0]       cmos_db
+	,   output              cmos_rst_n
+	,   output              cmos_pwdn
 	
+
+	,   input               cmos1_pclk
+	,   input               cmos1_vsync
+	,   input               cmos1_href
+	,   input   [7:0]       cmos1_db
+//	,   output              cmos1_rst_n
+//	,   output              cmos1_pwdn
+
+
+	,   input               cmos2_pclk
+	,   input               cmos2_vsync
+	,   input               cmos2_href
+	,   input   [7:0]       cmos2_db,
+//	,   output              cmos2_rst_n
+//	,   output              cmos2_pwdn,
+
+
 	output [4:0]           state_led,
 
     output [2:0]	       i2c_sel,
@@ -38,44 +64,55 @@ module top #(
     output                 tmds_clk_p_0,
     output [2:0]           tmds_d_n_0, //{r,g,b}
     output [2:0]           tmds_d_p_0
+
 );
     
     assign i2c_sel = 'b101;
 
-// ==================== 参数定义 ====================
-    `define	USE_THREE_FRAME_BUFFER
-    `define	DEF_ADDR_WIDTH 29 
-    `define	DEF_SRAM_DATA_WIDTH 256
-    `define	DEF_WR_VIDEO_WIDTH 32
-    `define	DEF_RD_VIDEO_WIDTH 32
-    
-    parameter ADDR_WIDTH          = `DEF_ADDR_WIDTH;        //存储单元是byte，总容量=2^29*16bit = 8Gbit,增加1位rank地址，{rank[0],bank[2:0],row[15:0],cloumn[9:0]}
-    parameter DATA_WIDTH          = `DEF_SRAM_DATA_WIDTH;   //与生成DDR3IP有关，此ddr3 4Gbit, x32， 时钟比例1:4 ，则固定256bit
-    parameter WR_VIDEO_WIDTH      = `DEF_WR_VIDEO_WIDTH;  
-    parameter RD_VIDEO_WIDTH      = `DEF_RD_VIDEO_WIDTH;
-
-    // ==================== 信号定义 ====================
-    //memory interface
+//memory interface
     wire                   memory_clk         ;
     wire                   dma_clk         	  ;
     wire                   DDR_pll_lock       ;
     wire                   cmd_ready          ;
     wire[2:0]              cmd                ;
     wire                   cmd_en             ;
+    //wire[5:0]              app_burst_number   ;
     wire[ADDR_WIDTH-1:0]   addr               ;
     wire                   wr_data_rdy        ;
-    wire                   wr_data_en         ;
-    wire                   wr_data_end        ;
+    wire                   wr_data_en         ;//
+    wire                   wr_data_end        ;//
     wire[DATA_WIDTH-1:0]   wr_data            ;   
     wire[DATA_WIDTH/8-1:0] wr_data_mask       ;   
     wire                   rd_data_valid      ;  
-    wire                   rd_data_end        ; 
+    wire                   rd_data_end        ;//unused 
     wire[DATA_WIDTH-1:0]   rd_data            ;   
     wire                   init_calib_complete;
-    wire                   TMDS_DDR_pll_lock  ;
-    wire                   pll_stop           ;
+    wire                   err;
+    wire TMDS_DDR_pll_lock;
 
-    wire                        video_clk;  //video pixel clock
+    //According to IP parameters to choose
+    `define	    WR_VIDEO_WIDTH_32
+    `define	DEF_WR_VIDEO_WIDTH 32
+
+    `define	    RD_VIDEO_WIDTH_32
+    `define	DEF_RD_VIDEO_WIDTH 32
+
+    `define	USE_THREE_FRAME_BUFFER
+
+    `define	DEF_ADDR_WIDTH 29 
+    `define	DEF_SRAM_DATA_WIDTH 256
+    
+    //=========================================================
+    //SRAM parameters
+    parameter ADDR_WIDTH          = `DEF_ADDR_WIDTH;        //存储单元是byte，总容量=2^29*16bit = 8Gbit,增加1位rank地址，{rank[0],bank[2:0],row[15:0],cloumn[9:0]}
+    parameter DATA_WIDTH          = `DEF_SRAM_DATA_WIDTH;   //与生成DDR3IP有关，此ddr3 4Gbit, x32， 时钟比例1:4 ，则固定256bit
+    parameter WR_VIDEO_WIDTH      = `DEF_WR_VIDEO_WIDTH;  
+    parameter RD_VIDEO_WIDTH      = `DEF_RD_VIDEO_WIDTH;  
+
+    //wire                            video_clk;  //video pixel clock
+    //-------------------
+    //syn_code
+    wire                      syn_off0_re;      // ofifo read enable signal
     wire                      syn_off0_vs;
     wire                      syn_off0_hs;
 
@@ -84,47 +121,67 @@ module top #(
 
     wire[15:0]                      cmos_16bit_data;
     wire                            cmos_16bit_clk;
-    wire                            cmos_16bit_wr;
     wire[15:0] 						write_data;
 
     wire[9:0]                       lut_index;
     wire[31:0]                      lut_data;
-    wire i2c_done;
 
-    // ==================== CMOS控制信号 ====================
-    wire cmos_clk;
-    reg cmos_reset;
-    reg [31:0] cmos_reset_delay_cnt;
-    reg cmos_start_config;
+    wire                        cmos_frame_clk  ;
+    wire                        cmos_frame_vsync;
+    wire                        cmos_frame_href ;
+    wire                        cmos_frame_de   ;
+    wire    [23:0]              cmos_frame_data ;
+
+    wire                        cmos1_frame_clk  ;
+    wire                        cmos1_frame_vsync;
+    wire                        cmos1_frame_href ;
+    wire                        cmos1_frame_de   ;
+    wire    [23:0]              cmos1_frame_data ;
+
+    wire                        cmos2_frame_clk  ;
+    wire                        cmos2_frame_vsync;
+    wire                        cmos2_frame_href ;
+    wire                        cmos2_frame_de   ;
+    wire    [23:0]              cmos2_frame_data ;
+    
+    wire                        serial_clk      ;
+    wire                        video_clk       ;
+    wire                        TMDS_lock       ;
+    wire                        video_vsync     ;
+    wire                        video_href      ;
+    wire                        video_de        ;
+    wire    [23:0]              video_data      ;
+
+    wire                        ila_clk         ;
+   
+/*
+    wire i2c_done;
+    wire i2c_err;
 
     assign cmos_xclk = cmos_clk;
     assign cmos_pwdn = 1'b0;
+//    assign cmos_rst_n = 1'b1;
     assign cmos_rst_n = cmos_reset;
     assign write_data = cmos_16bit_data;
+    //assign write_data = {cmos_16bit_data[4:0],cmos_16bit_data[10:5],cmos_16bit_data[15:11]};
+    //assign hdmi_hpd = 1;
 
     reg [4:0] cmos_vs_cnt;
     always@(posedge cmos_vsync) 
         cmos_vs_cnt <= cmos_vs_cnt + 1;
 
-
+*/
     //状态指示灯
+    reg [4:0] cmos_vs_cnt;
+    always@(posedge cmos_vsync) 
+        cmos_vs_cnt <= cmos_vs_cnt + 1;
     assign state_led[4] = ~i2c_done;
     assign state_led[3] = ~cmos_vs_cnt[4];
     assign state_led[2] = ~TMDS_DDR_pll_lock;
     assign state_led[1] = ~DDR_pll_lock; 
     assign state_led[0] = ~init_calib_complete; //DDR3初始化指示灯
 
-    // ==================== 畸变校正相关信号 ====================
-    wire [31:0] camera_param_0, camera_param_1, camera_param_2, camera_param_3;
-    wire [31:0] camera_param_4, camera_param_5, camera_param_6, camera_param_7;
-    reg [2:0] param_addr;
-    reg [31:0] param_data;
-    reg param_wr_en;
-    
-    // 畸变校正输出信号
-    wire [15:0] corrected_data;
-    wire corrected_de, corrected_vs, corrected_hs;
-    
+
     wire [15:0] HActive;
     wire HA_valid;
     wire [15:0] VActive;
@@ -154,7 +211,7 @@ module top #(
     Gowin_PLL Gowin_PLL_m0(
     	.clkin                     (clk                         ),
     	.clkout0                   (cmos_clk 	              	),
-        .clkout1                   ( 	              	        ), // aux_clk未使用
+        .clkout1                   (aux_clk 	              	),
         .clkout2                   (memory_clk 	              	),
     	.lock 					   (DDR_pll_lock 				),
         .reset                     (1'b0                        ),
@@ -163,7 +220,22 @@ module top #(
         .enclk2                    (pll_stop                    ) //input enclk2
 	);
 
-    // CMOS复位逻辑（变量已在前面声明）
+    ////IIC 延时约1s复位
+//    reg [31:0] clk_delay = 0;
+//    wire iic_rst = clk_delay != 65_000_000;
+//    always@(posedge video_clk, negedge rst_n) begin
+//        if (!rst_n) begin
+//            clk_delay = 0;
+//        end
+//        else begin 
+//            clk_delay <=( clk_delay == 65_000_000)? clk_delay : clk_delay + 1;
+//        end
+//    end
+
+
+    reg [31:0] cmos_reset_delay_cnt;
+    reg cmos_reset;
+    reg cmos_start_config;
     always@(posedge clk or negedge rst_n)
     begin
         if(!rst_n)
@@ -192,7 +264,7 @@ module top #(
     end
 
     //configure look-up table
-
+generate if(USE_1280 == "true")
     lut_ov5640_rgb565 #(
     	.HActive(12'd1280),
     	.VActive(12'd720),
@@ -203,7 +275,18 @@ module top #(
     	.lut_index(lut_index),
     	.lut_data(lut_data)
     );
-
+else
+    lut_ov5640_rgb565 #(
+    	.HActive(12'd800),
+    	.VActive(12'd600),
+    	.HTotal(13'd1892),
+    	.VTotal(13'd740),
+        .USE_4vs3_frame("false")
+    )lut_ov5640_rgb565_m0(
+    	.lut_index(lut_index),
+    	.lut_data(lut_data)
+    );
+endgenerate
 
     //I2C master controller
     i2c_config i2c_config_m0(
@@ -215,7 +298,7 @@ module top #(
     	.lut_dev_addr               (lut_data[31:24]          ),
     	.lut_reg_addr               (lut_data[23:8]           ),
     	.lut_reg_data               (lut_data[7:0]            ),
-    	.error                      (                         ), // i2c_err未使用
+    	.error                      (i2c_err                  ),
     	.done                       (i2c_done                 ),
     	.i2c_scl                    (cmos_scl                 ),
     	.i2c_sda                    (cmos_sda                 )
@@ -223,263 +306,493 @@ module top #(
     
 
     //CMOS sensor 8bit data is converted to 16bit data
-    cmos_8_16bit cmos_8_16bit_m0(
-    	.rst                        (~rst_n                   ),
-    	.pclk                       (cmos_pclk                ),
-    	.pdata_i                    (cmos_db                  ),
-    	.de_i                       (cmos_href                ),
-    	.pdata_o                    (cmos_16bit_data          ),
-    	.hblank                     (cmos_16bit_wr            ),
-    	.de_o                       (cmos_16bit_clk           )
+//    cmos_8_16bit cmos_8_16bit_m0(
+//    	.rst                        (~rst_n                   ),
+//    	.pclk                       (cmos_pclk                ),
+//    	.pdata_i                    (cmos_db                  ),
+//    	.de_i                       (cmos_href                ),
+//    	.pdata_o                    (cmos_16bit_data          ),
+//    	.hblank                     (cmos_16bit_wr            ),
+//    	.de_o                       (cmos_16bit_clk           )
+//    );
+
+//改为24bit的版本
+    ov5640_capture_data  u_ov5640_capture_data(
+        .rst_n                      (rst_n              ), 
+
+        .cam_pclk                   (cmos_pclk          ), 
+        .cam_vsync                  (cmos_vsync         ), 
+        .cam_href                   (cmos_href          ), 
+        .cam_data                   (cmos_db            ), 
+        .cam_rst_n                  (cmos_rst_n         ), 
+        .cam_pwdn                   (cmos_pwdn          ), 
+
+        .cmos_frame_clk             (cmos_frame_clk     ), 
+       .cmos_frame_vsync           (cmos_frame_vsync   ), 
+        .cmos_frame_href            (cmos_frame_href    ), 
+        .cmos_frame_de              (cmos_frame_de      ),   
+        .cmos_frame_data            (cmos_frame_data    )
     );
 
-    // ==================== 相机参数模块 ====================
-    camera_parameters camera_params_inst (
-        .clk(clk),
-        .rst_n(rst_n),
-        .param_addr(param_addr),
-        .param_data(param_data),
-        .wr_en(param_wr_en),
-        .param0(camera_param_0),
-        .param1(camera_param_1),
-        .param2(camera_param_2),
-        .param3(camera_param_3),
-        .param4(camera_param_4),
-        .param5(camera_param_5),
-        .param6(camera_param_6),
-        .param7(camera_param_7)
+    ov5640_capture_data  u_ov5640_capture_data1(
+        .rst_n                      (rst_n              ), 
+
+        .cam_pclk                   (cmos1_pclk         ), 
+        .cam_vsync                  (cmos1_vsync        ), 
+        .cam_href                   (cmos1_href         ), 
+        .cam_data                   (cmos1_db           ), 
+        .cam_rst_n                  (        ), 
+        .cam_pwdn                   (        ), 
+
+        .cmos_frame_clk             (cmos1_frame_clk    ), 
+        .cmos_frame_vsync           (cmos1_frame_vsync  ), 
+        .cmos_frame_href            (cmos1_frame_href   ), 
+        .cmos_frame_de              (cmos1_frame_de     ),   
+        .cmos_frame_data            (cmos1_frame_data   )
     );
+
+    ov5640_capture_data  u_ov5640_capture_data2(
+        .rst_n                      (rst_n              ), 
+
+        .cam_pclk                   (cmos2_pclk         ), 
+        .cam_vsync                  (cmos2_vsync        ), 
+        .cam_href                   (cmos2_href         ), 
+        .cam_data                   (cmos2_db           ), 
+        .cam_rst_n                  (        ), 
+        .cam_pwdn                   (        ), 
+
+        .cmos_frame_clk             (cmos2_frame_clk    ), 
+       .cmos_frame_vsync           (cmos2_frame_vsync  ), 
+        .cmos_frame_href            (cmos2_frame_href   ), 
+        .cmos_frame_de              (cmos2_frame_de     ),   
+        .cmos_frame_data            (cmos2_frame_data   )
+    );
+
+video_stiching_top u_video_stiching_top( 
+//----------------------------------------------------
+// Cmos port
+        .cmos0_clk				(cmos_frame_clk     )
+    ,   .cmos0_vsync 			(cmos_frame_vsync   )    
+    ,   .cmos0_href  			(cmos_frame_href    )    
+    ,   .cmos0_clken 			(cmos_frame_de      )    
+    ,   .cmos0_data  			({cmos_frame_data[7-:8],cmos_frame_data[15-:8],cmos_frame_data[23-:8]})    
+
+	,	.cmos1_clk				(cmos1_frame_clk     )
+    ,   .cmos1_vsync 			(cmos1_frame_vsync   )    
+    ,   .cmos1_href  			(cmos1_frame_href    )    
+    ,   .cmos1_clken 			(cmos1_frame_de      )    
+    ,   .cmos1_data  			({cmos1_frame_data[7-:8],cmos1_frame_data[15-:8],cmos1_frame_data[23-:8]})    
     
-    // 相机参数初始化
-    initial begin
-        param_wr_en = 1'b1;
-        param_addr = 0; param_data = 32'h00000578; // fx = 1400
-        #10 param_addr = 1; param_data = 32'h00000578; // fy = 1400
-        #10 param_addr = 2; param_data = 32'h00000280; // cx = 640
-        #10 param_addr = 3; param_data = 32'h000001C2; // cy = 450
-        #10 param_addr = 4; param_data = 32'hFFFFFC18; // k1 = -0.1
-        #10 param_addr = 5; param_data = 32'h00000064; // k2 = 0.01
-        #10 param_addr = 6; param_data = 32'h00000000; // k3 = 0
-        #10 param_addr = 7; param_data = 32'h00000000; // 保留
-        #50 param_wr_en = 1'b0;
-    end
+	,	.cmos2_clk				(cmos2_frame_clk     )
+    ,   .cmos2_vsync 			(cmos2_frame_vsync   )    
+    ,   .cmos2_href  			(cmos2_frame_href    )    
+    ,   .cmos2_clken 			(cmos2_frame_de      )    
+    ,   .cmos2_data  			({cmos2_frame_data[7-:8],cmos2_frame_data[15-:8],cmos2_frame_data[23-:8]})   
+    
+
+
+//----------------------------------------------------
+// Video port
+    ,   .video_clk              (video_clk          )
+    ,   .video_vsync            (video_vsync        )
+    ,   .video_href             (video_href         )
+    ,   .video_de               (video_de           )
+    ,   .video_data             (video_data         )
+
+//----------------------------------------------------
+// DDR native port
+    ,   .ref_clk                (clk                )
+    ,   .sys_rst_n              (rst_n              )
+    ,   .init_calib_complete    (init_calib_complete)
+    ,   .c0_sys_clk             (memory_clk         )
+    ,   .c0_sys_clk_locked      (DDR_pll_lock       )
+    ,   .ddr_addr               (ddr_addr           )
+    ,   .ddr_bank               (ddr_bank           )
+    ,   .ddr_cs                 (ddr_cs             )
+    ,   .ddr_ras                (ddr_ras            )
+    ,   .ddr_cas                (ddr_cas            )
+    ,   .ddr_we                 (ddr_we             )
+    ,   .ddr_ck                 (ddr_ck             )
+    ,   .ddr_ck_n               (ddr_ck_n           )
+    ,   .ddr_cke                (ddr_cke            )
+    ,   .ddr_odt                (ddr_odt            )
+    ,   .ddr_reset_n            (ddr_reset_n        )
+    ,   .ddr_dm                 (ddr_dm             )
+    ,   .ddr_dq                 (ddr_dq             )
+    ,   .ddr_dqs                (ddr_dqs            )
+    ,   .ddr_dqs_n              (ddr_dqs_n          )
+);
 
     //The video output timing generator and generate a frame read data request
     //输出
-    wire out_de;
-    wire [9:0] lcd_x,lcd_y;
+//    wire out_de;
+//    wire [9:0] lcd_x,lcd_y;
 
-    // ==================== 畸变校正模块 ====================
-    distortion_correction #(
-        .DATA_WIDTH(16),                            // 数据位宽：16位RGB565格式
-        .H_RES(1280),                               // 水平分辨率：1280像素
-        .V_RES(720)                                 // 垂直分辨率：720像素
-    ) distortion_correction_inst (
-        // 时钟和复位信号
-        .clk(video_clk),                            // 视频像素时钟
-        .rst_n(rst_n),                              // 复位信号（低有效）
-        
-        // 相机内参（来自相机参数模块）
-        .fx(camera_param_0[15:0]),                  // 焦距fx（像素单位）
-        .fy(camera_param_1[15:0]),                  // 焦距fy（像素单位）
-        .cx(camera_param_2[15:0]),                  // 光心cx（像素单位）
-        .cy(camera_param_3[15:0]),                  // 光心cy（像素单位）
-        .k1(camera_param_4[15:0]),                  // 径向畸变系数k1
-        .k2(camera_param_5[15:0]),                  // 径向畸变系数k2
-        .k3(camera_param_6[15:0]),                  // 径向畸变系数k3
-        .valid_params(init_calib_complete),         // 参数有效标志（DDR3初始化完成）
-        
-        // 输入视频接口（来自帧缓存）
-        .vin_data(off0_syn_data),                   // 输入视频数据（16位RGB565）
-        .vin_de(off0_syn_de),                       // 输入数据有效信号
-        .vin_vs(syn_off0_vs),                       // 输入垂直同步信号
-        .vin_hs(syn_off0_hs),                       // 输入水平同步信号
-        
-        // 输出视频接口（校正后的视频）
-        .vout_data(corrected_data),                 // 输出校正后的视频数据（16位RGB565）
-        .vout_de(corrected_de),                     // 输出数据有效信号
-        .vout_vs(corrected_vs),                     // 输出垂直同步信号
-        .vout_hs(corrected_hs),                     // 输出水平同步信号
-        
-        // 像素坐标接口（来自时序生成器）
-        .pixel_x(lcd_x),                            // 当前像素X坐标
-        .pixel_y(lcd_y)                             // 当前像素Y坐标
-    );
-
-
-    // ==================== VGA时序生成模块 ====================
+generate if(USE_1280 == "true")
     vga_timing #(
-        .H_ACTIVE(16'd1280),                        // 水平有效像素数：1280
-        .H_FP(16'd110),                             // 水平前肩时间：110个像素时钟
-        .H_SYNC(16'd40),                            // 水平同步脉冲宽度：40个像素时钟
-        .H_BP(16'd220),                             // 水平后肩时间：220个像素时钟
-        .V_ACTIVE(16'd720),                         // 垂直有效行数：720行
-        .V_FP(16'd5),                               // 垂直前肩时间：5行
-        .V_SYNC(16'd5),                             // 垂直同步脉冲宽度：5行
-        .V_BP(16'd20),                              // 垂直后肩时间：20行
-        .HS_POL(1'b1),                              // 水平同步极性：正极性
-        .VS_POL(1'b1)                               // 垂直同步极性：正极性
+        .H_ACTIVE(16'd1280), 
+        .H_FP(16'd110),
+        .H_SYNC(16'd40),
+        .H_BP(16'd220),
+        .V_ACTIVE(16'd720),
+        .V_FP(16'd5),
+        .V_SYNC(16'd5),
+        .V_BP(16'd20), 	
+        .HS_POL(1'b1),   	
+        .VS_POL(1'b1)
     ) vga_timing_m0(
-        // 时钟和复位信号
-        .clk (video_clk),                           // 视频像素时钟
-        .rst (~rst_n),                              // 复位信号（高有效）
+        .clk (video_clk),
+        .rst (~rst_n),
 
-        // 像素坐标输出
-        .active_x(lcd_x),                           // 当前有效区域X坐标（0-1279）
-        .active_y(lcd_y),                           // 当前有效区域Y坐标（0-719）
+        .active_x(lcd_x),
+        .active_y(lcd_y),
 
-        // 同步信号输出
-        .hs(syn_off0_hs),                           // 水平同步信号输出
-        .vs(syn_off0_vs),                           // 垂直同步信号输出
-        .de(out_de)                                 // 数据使能信号输出（有效区域标志）
+        .hs(syn_off0_hs),
+        .vs(syn_off0_vs),
+        .de(out_de)
     );
+else    //800x600
+    vga_timing #(
+        .H_ACTIVE(16'd800), 
+        .H_FP(16'd40),
+        .H_SYNC(16'd128),
+        .H_BP(16'd88),
+        .V_ACTIVE(16'd600),
+        .V_FP(16'd1),
+        .V_SYNC(16'd4),
+        .V_BP(16'd23), 	
+        .HS_POL(1'b1),   	
+        .VS_POL(1'b1)
+    ) vga_timing_m0(
+        .clk (video_clk),
+        .rst (~rst_n),
 
-    //CMOS DATA
+        .active_x(lcd_x),
+        .active_y(lcd_y),
+
+        .hs(syn_off0_hs),
+        .vs(syn_off0_vs),
+        .de(out_de)
+    );
+endgenerate
     
-    Video_Frame_Buffer_Top Video_Frame_Buffer_Top_inst
-    ( 
-        // 复位和时钟信号
-        .I_rst_n              (init_calib_complete ),  // 复位信号，DDR3初始化完成后有效
-        .I_dma_clk            (dma_clk          ),      // DMA时钟，DDR3控制器输出的用户接口时钟
-        
-        // 三帧缓存控制（可选功能）
-        `ifdef USE_THREE_FRAME_BUFFER 
-        .I_wr_halt            (1'd0             ),      // 写入暂停控制：1=暂停，0=正常
-        .I_rd_halt            (1'd0             ),      // 读取暂停控制：1=暂停，0=正常
-        `endif
-        
-        // 视频数据输入接口（来自摄像头）
-        .I_vin0_clk           (cmos_16bit_clk   ),          // 输入视频时钟（摄像头像素时钟）
-        .I_vin0_vs_n          (~cmos_vsync      ),          // 输入垂直同步信号（负极性）
-        .I_vin0_de            (cmos_16bit_wr    ),          // 输入数据有效信号
-        .I_vin0_data          (write_data       ),          // 输入视频数据（16位RGB565）
-        .O_vin0_fifo_full     (                 ),          // 输入FIFO满标志（未连接）
-        
-        // 视频数据输出接口（给显示模块）
-        .I_vout0_clk          (video_clk        ),      // 输出视频时钟（显示像素时钟）
-        .I_vout0_vs_n         (~syn_off0_vs     ),      // 输出垂直同步信号（负极性）
-        .I_vout0_de           (out_de           ),      // 输出数据使能请求
-        .O_vout0_den          (off0_syn_de      ),      // 输出数据有效信号
-        .O_vout0_data         (off0_syn_data    ),      // 输出视频数据（32位）
-        .O_vout0_fifo_empty   (                 ),      // 输出FIFO空标志（未连接）
-        
-        // DDR3内存访问接口（连接到DDR3控制器）
-        .I_cmd_ready          (cmd_ready          ),    // DDR3命令准备就绪信号
-        .O_cmd                (cmd                ),    // DDR3命令：0=写入，1=读取
-        .O_cmd_en             (cmd_en             ),    // DDR3命令使能信号
-        .O_addr               (addr               ),    // DDR3地址总线[ADDR_WIDTH-1:0]
-        .I_wr_data_rdy        (wr_data_rdy        ),    // DDR3写数据准备就绪信号
-        .O_wr_data_en         (wr_data_en         ),    // DDR3写数据使能信号
-        .O_wr_data_end        (wr_data_end        ),    // DDR3写数据结束信号
-        .O_wr_data            (wr_data            ),    // DDR3写数据总线（256位）
-        .O_wr_data_mask       (wr_data_mask       ),    // DDR3写数据掩码（32位）
-        .I_rd_data_valid      (rd_data_valid      ),    // DDR3读数据有效信号
-        .I_rd_data_end        (rd_data_end        ),    // DDR3读数据结束信号
-        .I_rd_data            (rd_data            ),    // DDR3读数据总线（256位）
-        .I_init_calib_complete(init_calib_complete)     // DDR3初始化校准完成信号
-    ); 
 
-    DDR3MI u_ddr3 
-    (
-        // 系统时钟和复位信号
-        .clk                (clk                ),      // 系统主时钟（50MHz）
-        .memory_clk         (memory_clk         ),      // DDR3内存时钟（400MHz）
-        .pll_stop           (pll_stop           ),      // PLL停止控制信号
-        .pll_lock           (DDR_pll_lock       ),      // PLL锁定状态信号
-        .rst_n              (rst_n              ),      // 系统复位信号（低有效）
-        
-        // DDR3用户接口 - 命令通道
-        .cmd_ready          (cmd_ready          ),      // 命令准备就绪信号
-        .cmd                (cmd                ),      // 命令类型：读/写/刷新等
-        .cmd_en             (cmd_en             ),      // 命令使能信号
-        .addr               (addr               ),      // 29位地址总线
-        
-        // DDR3用户接口 - 写数据通道
-        .wr_data_rdy        (wr_data_rdy        ),      // 写数据准备就绪信号
-        .wr_data            (wr_data            ),      // 256位写数据总线
-        .wr_data_en         (wr_data_en         ),      // 写数据使能信号
-        .wr_data_end        (wr_data_end        ),      // 写数据结束信号
-        .wr_data_mask       (wr_data_mask       ),      // 32位写数据掩码
-        
-        // DDR3用户接口 - 读数据通道
-        .rd_data            (rd_data            ),      // 256位读数据总线
-        .rd_data_valid      (rd_data_valid      ),      // 读数据有效信号
-        .rd_data_end        (rd_data_end        ),      // 读数据结束信号
-        
-        // DDR3控制接口
-        .sr_req             (1'b0               ),      // 自刷新请求（未使用）
-        .ref_req            (1'b0               ),      // 刷新请求（未使用）
-        .sr_ack             (                   ),      // 自刷新确认（未连接）
-        .ref_ack            (                   ),      // 刷新确认（未连接）
-        .init_calib_complete(init_calib_complete),      // 初始化校准完成信号
-        .clk_out            (dma_clk            ),      // 用户接口时钟输出（DMA时钟）
-        .burst              (1'b1               ),      // 突发模式使能
-        
-        // DDR3物理接口（连接到外部DDR3芯片）
-        .ddr_rst            (                 ),        // DDR3复位输出（未连接）
-        .O_ddr_addr         (ddr_addr         ),        // DDR3地址总线（16位）
-        .O_ddr_ba           (ddr_bank         ),        // DDR3 Bank地址（3位）
-        .O_ddr_cs_n         (ddr_cs           ),        // DDR3片选信号（低有效）
-        .O_ddr_ras_n        (ddr_ras          ),        // DDR3行地址选通（低有效）
-        .O_ddr_cas_n        (ddr_cas          ),        // DDR3列地址选通（低有效）
-        .O_ddr_we_n         (ddr_we           ),        // DDR3写使能（低有效）
-        .O_ddr_clk          (ddr_ck           ),        // DDR3差分时钟正端
-        .O_ddr_clk_n        (ddr_ck_n         ),        // DDR3差分时钟负端
-        .O_ddr_cke          (ddr_cke          ),        // DDR3时钟使能
-        .O_ddr_odt          (ddr_odt          ),        // DDR3片上终端阻抗
-        .O_ddr_reset_n      (ddr_reset_n      ),        // DDR3复位信号（低有效）
-        .O_ddr_dqm          (ddr_dm           ),        // DDR3数据掩码（4位）
-        .IO_ddr_dq          (ddr_dq           ),        // DDR3数据总线（32位双向）
-        .IO_ddr_dqs         (ddr_dqs          ),        // DDR3数据选通（4位双向）
-        .IO_ddr_dqs_n       (ddr_dqs_n        )         // DDR3数据选通负端（4位双向）
-    );
+    //输入测试图
+    ///--------------------------
+    wire        tp0_vs_in  ;
+    wire        tp0_hs_in  ;
+    wire        tp0_de_in ;
+    wire [ 7:0] tp0_data_r;
+    wire [ 7:0] tp0_data_g;
+    wire [ 7:0] tp0_data_b;
 
+generate if(USE_TPG == "true")         
+begin
+    if(USE_1280 == "true")
+    begin
+        testpattern testpattern_inst_1280
+        (
+            .I_pxl_clk   (video_clk    ),//pixel clock
+            .I_rst_n     (rst_n        ),//low active 
+            .I_mode      (3'b010       ),//data select
+            .I_single_r  (8'd255       ),
+            .I_single_g  (8'd255       ),
+            .I_single_b  (8'd255       ),                  //800x600    //1024x768   //1280x720   //1920x1080 
+            .I_h_total   (12'd1650     ),//hor total time  // 12'd1056  // 12'd1344  // 12'd1650  // 12'd2200
+            .I_h_sync    (12'd40       ),//hor sync time   // 12'd128   // 12'd136   // 12'd40    // 12'd44  
+            .I_h_bporch  (12'd220      ),//hor back porch  // 12'd88    // 12'd160   // 12'd220   // 12'd148 
+            .I_h_res     (12'd1280     ),//hor resolution  // 12'd800   // 12'd1024  // 12'd1280  // 12'd1920
+            .I_v_total   (12'd750      ),//ver total time  // 12'd628   // 12'd806   // 12'd750   // 12'd1125 
+            .I_v_sync    (12'd5        ),//ver sync time   // 12'd4     // 12'd6     // 12'd5     // 12'd5   
+            .I_v_bporch  (12'd20       ),//ver back porch  // 12'd23    // 12'd29    // 12'd20    // 12'd36  
+            .I_v_res     (12'd720      ),//ver resolution  // 12'd600   // 12'd768   // 12'd720   // 12'd1080 
+            .I_hs_pol    (1'b1         ),//0,负极性;1,正极性
+            .I_vs_pol    (1'b1         ),//0,负极性;1,正极性
+            .O_de        (tp0_de_in    ),   
+            .O_hs        (tp0_hs_in    ),
+            .O_vs        (tp0_vs_in    ),
+            .O_data_r    (tp0_data_r   ),   
+            .O_data_g    (tp0_data_g   ),
+            .O_data_b    (tp0_data_b   )
+        );
+    end else begin
+        testpattern testpattern_inst_800
+        (
+            .I_pxl_clk   (video_clk    ),//pixel clock
+            .I_rst_n     (rst_n        ),//low active 
+            .I_mode      (3'b000       ),//data select
+            .I_single_r  (8'd100       ),
+            .I_single_g  (8'd255       ),
+            .I_single_b  (8'd100       ),                  //800x600    //1024x768   //1280x720   //1920x1080 
+            .I_h_total   (12'd1056     ),//hor total time  // 12'd1056  // 12'd1344  // 12'd1650  // 12'd2200
+            .I_h_sync    (12'd128      ),//hor sync time   // 12'd128   // 12'd136   // 12'd40    // 12'd44  
+            .I_h_bporch  (12'd88       ),//hor back porch  // 12'd88    // 12'd160   // 12'd220   // 12'd148 
+            .I_h_res     (12'd800      ),//hor resolution  // 12'd800   // 12'd1024  // 12'd1280  // 12'd1920
+            .I_v_total   (12'd628      ),//ver total time  // 12'd628   // 12'd806   // 12'd750   // 12'd1125 
+            .I_v_sync    (12'd4        ),//ver sync time   // 12'd4     // 12'd6     // 12'd5     // 12'd5   
+            .I_v_bporch  (12'd23       ),//ver back porch  // 12'd23    // 12'd29    // 12'd20    // 12'd36  
+            .I_v_res     (12'd600      ),//ver resolution  // 12'd600   // 12'd768   // 12'd720   // 12'd1080 
+            .I_hs_pol    (1'b1         ),//0,负极性;1,正极性
+            .I_vs_pol    (1'b1         ),//0,负极性;1,正极性
+            .O_de        (tp0_de_in    ),   
+            .O_hs        (tp0_hs_in    ),
+            .O_vs        (tp0_vs_in    ),
+            .O_data_r    (tp0_data_r   ),   
+            .O_data_g    (tp0_data_g   ),
+            .O_data_b    (tp0_data_b   )
+        );
+    end
+end
+endgenerate
+    
+    
+//    wire fb_vin_clk;
+//    wire fb_vin_vsync;
+//    wire [15:0] fb_vin_data;
+//    wire fb_vin_de;
+
+//generate if(USE_TPG == "true")
+//begin
+//    assign fb_vin_clk      = video_clk;
+//    assign fb_vin_vsync    = tp0_vs_in;
+//    assign fb_vin_data     = {tp0_data_r[7:3],tp0_data_g[7:2],tp0_data_b[7:3]};
+//    assign fb_vin_de       = tp0_de_in;
+//end else begin //CMOS DATA
+//    assign fb_vin_clk      = cmos_16bit_clk;
+//    assign fb_vin_vsync    = cmos_vsync;
+//    assign fb_vin_data     = write_data;
+//    assign fb_vin_de       = cmos_16bit_wr;
+//end
+//endgenerate
+    
+//    Video_Frame_Buffer_Top Video_Frame_Buffer_Top_inst
+//    ( 
+//        .I_rst_n              (init_calib_complete ),
+//        .I_dma_clk            (dma_clk          ),
+//    `ifdef USE_THREE_FRAME_BUFFER 
+//        .I_wr_halt            (1'd0             ), //1:halt,  0:no halt
+//        .I_rd_halt            (1'd0             ), //1:halt,  0:no halt
+//    `endif
+
+ //        video data input       
+//        .I_vin0_clk           (fb_vin_clk   ),
+//        .I_vin0_vs_n          (~fb_vin_vsync),//只接收负极性
+//        .I_vin0_de            (fb_vin_de    ),
+//        .I_vin0_data          (fb_vin_data  ),
+//        .O_vin0_fifo_full     (             ),
+
+//         video data output            
+//        .I_vout0_clk          (video_clk        ),
+//        .I_vout0_vs_n         (~syn_off0_vs     ),//只接收负极性
+//        .I_vout0_de           (out_de           ),
+//        .O_vout0_den          (off0_syn_de      ),
+//        .O_vout0_data         (off0_syn_data    ),
+//        .O_vout0_fifo_empty   (                 ),
+//         ddr write request
+//        .I_cmd_ready          (cmd_ready          ),
+//        .O_cmd                (cmd                ),//0:write;  1:read
+//        .O_cmd_en             (cmd_en             ),
+//        .O_app_burst_number   (app_burst_number   ),
+//        .O_addr               (addr               ),//[ADDR_WIDTH-1:0]
+//        .I_wr_data_rdy        (wr_data_rdy        ),
+//        .O_wr_data_en         (wr_data_en         ),//
+//        .O_wr_data_end        (wr_data_end        ),//
+//        .O_wr_data            (wr_data            ),//[DATA_WIDTH-1:0]
+//        .O_wr_data_mask       (wr_data_mask       ),
+//        .I_rd_data_valid      (rd_data_valid      ),
+//        .I_rd_data_end        (rd_data_end        ),//unused 
+//        .I_rd_data            (rd_data            ),//[DATA_WIDTH-1:0]
+//        .I_init_calib_complete(init_calib_complete)
+//    ); 
+
+//    DDR3MI u_ddr3 
+//    (
+//        .clk                (clk                ),
+//        .memory_clk         (memory_clk         ),
+//        .pll_stop           (pll_stop           ),
+//        .pll_lock           (DDR_pll_lock       ),
+//        .rst_n              (rst_n              ),
+//        .app_burst_number   (app_burst_number   ),
+//        .cmd_ready          (cmd_ready          ),
+//        .cmd                (cmd                ),
+//        .cmd_en             (cmd_en             ),
+//        .addr               (addr               ),
+//        .wr_data_rdy        (wr_data_rdy        ),
+//        .wr_data            (wr_data            ),
+//        .wr_data_en         (wr_data_en         ),
+//        .wr_data_end        (wr_data_end        ),
+//        .wr_data_mask       (wr_data_mask       ),
+//        .rd_data            (rd_data            ),
+//        .rd_data_valid      (rd_data_valid      ),
+//        .rd_data_end        (rd_data_end        ),
+//        .sr_req             (1'b0               ),
+//        .ref_req            (1'b0               ),
+//        .sr_ack             (                   ),
+//        .ref_ack            (                   ),
+//        .init_calib_complete(init_calib_complete),
+//        .clk_out            (dma_clk            ),
+//        .burst              (1'b1               ),
+//         mem interface
+//        .ddr_rst            (                 ),
+//        .O_ddr_addr         (ddr_addr         ),
+//        .O_ddr_ba           (ddr_bank         ),
+//        .O_ddr_cs_n         (ddr_cs           ),
+//        .O_ddr_ras_n        (ddr_ras          ),
+//        .O_ddr_cas_n        (ddr_cas          ),
+//        .O_ddr_we_n         (ddr_we           ),
+//        .O_ddr_clk          (ddr_ck           ),
+//        .O_ddr_clk_n        (ddr_ck_n         ),
+//        .O_ddr_cke          (ddr_cke          ),
+//        .O_ddr_odt          (ddr_odt          ),
+//        .O_ddr_reset_n      (ddr_reset_n      ),
+//        .O_ddr_dqm          (ddr_dm           ),
+//        .IO_ddr_dq          (ddr_dq           ),
+//        .IO_ddr_dqs         (ddr_dqs          ),
+//        .IO_ddr_dqs_n       (ddr_dqs_n        )
+//    );
     //==============================================================================
     //TMDS TX(HDMI4)
+
+    //---------------------------------------------
+//    wire [4:0] lcd_r,lcd_b;
+//    wire [5:0] lcd_g;
+//    wire lcd_vs,lcd_de,lcd_hs,lcd_dclk;
+//    
+//    assign {lcd_r,lcd_g,lcd_b}    = off0_syn_de ? off0_syn_data[15:0] : 16'h0000;//{r,g,b}
+//    assign lcd_vs      			  = Pout_vs_dn[1];//syn_off0_vs;
+//    assign lcd_hs      			  = Pout_hs_dn[1];//syn_off0_hs;
+//    assign lcd_de      			  = Pout_de_dn[1];//off0_syn_de;
+//    assign lcd_dclk    			  = video_clk;//video_clk_phs;
+
+//    reg  [1:0]  Pout_hs_dn;
+//    reg  [1:0]  Pout_vs_dn;
+//    reg  [1:0]  Pout_de_dn;
+
+//    always@(posedge video_clk or negedge rst_n)
+//    begin
+//        if(!rst_n)
+//            begin                          
+//                Pout_hs_dn  <= {2'b11};
+//                Pout_vs_dn  <= {2'b11}; 
+//                Pout_de_dn  <= {2'b00}; 
+//            end
+//        else 
+//            begin                          
+//                Pout_hs_dn  <= {Pout_hs_dn[0],syn_off0_hs};
+//                Pout_vs_dn  <= {Pout_vs_dn[0],syn_off0_vs}; 
+//                Pout_de_dn  <= {Pout_de_dn[0],out_de}; 
+//            end
+//    end
+
+
     wire serial_clk;
     wire hdmi4_rst_n;
 
     TMDS_PLL u_tmds_pll(
-        .clkin     (clk              ),
-        .clkout0   (serial_clk       ),
-        .clkout1   (video_clk        ),
-        .lock      (TMDS_DDR_pll_lock)
+        .clkin     (clk              ),     //input clk 
+        .clkout0   (serial_clk       ),     //output clk x5ni
+        .clkout1   (video_clk        ),     //output clk x1
+        .lock      (TMDS_DDR_pll_lock)      //output lock
         );
 
     assign hdmi4_rst_n = rst_n & TMDS_DDR_pll_lock;
 
-    wire dvi0_rgb_clk;
-    wire dvi0_rgb_vs ;
-    wire dvi0_rgb_hs ;
-    wire dvi0_rgb_de ;
-    wire [7:0] dvi0_rgb_r  ;
-    wire [7:0] dvi0_rgb_g  ;
-    wire [7:0] dvi0_rgb_b  ;
 
-    assign dvi0_rgb_clk = video_clk;
-    assign dvi0_rgb_vs  = corrected_vs;
-    assign dvi0_rgb_hs  = corrected_hs;
-    assign dvi0_rgb_de  = corrected_de;
-    assign dvi0_rgb_r   = {corrected_data[15:11], 3'd0};  // 5位转8位
-    assign dvi0_rgb_g   = {corrected_data[10:5], 2'd0};   // 6位转8位
-    assign dvi0_rgb_b   = {corrected_data[4:0], 3'd0};    // 5位转8位
+
+
+//    wire dvi0_rgb_clk;
+//    wire dvi0_rgb_vs ;
+//    wire dvi0_rgb_hs ;
+//    wire dvi0_rgb_de ;
+//    wire [7:0] dvi0_rgb_r  ;
+//    wire [7:0] dvi0_rgb_g  ;
+//    wire [7:0] dvi0_rgb_b  ;
+
+//    wire dvi1_rgb_clk;
+//    wire dvi1_rgb_vs ;
+//    wire dvi1_rgb_hs ;
+//    wire dvi1_rgb_de ;
+//    wire [7:0] dvi1_rgb_r  ;
+//    wire [7:0] dvi1_rgb_g  ;
+//    wire [7:0] dvi1_rgb_b  ;
+
+//generate if(USE_TPG == "true")
+//begin
+    //DVI 1 use DDR & Framebuffer
+//    assign dvi0_rgb_clk = lcd_dclk;
+//    assign dvi0_rgb_vs  = lcd_vs;
+//    assign dvi0_rgb_hs  = lcd_hs;
+//    assign dvi0_rgb_de  = lcd_de;
+//    assign dvi0_rgb_r   = {lcd_r,3'd0};
+//    assign dvi0_rgb_g   = {lcd_g,2'd0};
+//    assign dvi0_rgb_b   = {lcd_b,3'd0};
+    //DVI2 directly use TPG video
+//    assign dvi1_rgb_clk = video_clk ;
+//    assign dvi1_rgb_vs  = tp0_vs_in ;
+//    assign dvi1_rgb_hs  = tp0_hs_in ;
+//    assign dvi1_rgb_de  = tp0_de_in ;
+//    assign dvi1_rgb_r   = tp0_data_r;
+//    assign dvi1_rgb_g   = tp0_data_g;
+//    assign dvi1_rgb_b   = tp0_data_b;
+//end else begin
+//    assign dvi0_rgb_clk = lcd_dclk;
+//    assign dvi0_rgb_vs  = lcd_vs;
+//    assign dvi0_rgb_hs  = lcd_hs;
+//    assign dvi0_rgb_de  = lcd_de;
+//    assign dvi0_rgb_r   = {lcd_r,3'd0};
+//    assign dvi0_rgb_g   = {lcd_g,2'd0};
+//    assign dvi0_rgb_b   = {lcd_b,3'd0};
+
+//    assign dvi1_rgb_clk = lcd_dclk;
+//    assign dvi1_rgb_vs  = lcd_vs;
+//    assign dvi1_rgb_hs  = lcd_hs;
+//    assign dvi1_rgb_de  = lcd_de;
+//    assign dvi1_rgb_r   = {lcd_r,3'd0};
+//    assign dvi1_rgb_g   = {lcd_g,2'd0};
+//    assign dvi1_rgb_b   = {lcd_b,3'd0};
+//end
+//endgenerate
 
     DVI_TX_Top DVI_TX_Top_inst0
     (
-        .I_rst_n       (hdmi4_rst_n   ),
+        .I_rst_n       (hdmi4_rst_n   ),  //asynchronous reset, low active
         .I_serial_clk  (serial_clk    ),
-        .I_rgb_clk     (dvi0_rgb_clk),
-        .I_rgb_vs      (dvi0_rgb_vs ),    
-        .I_rgb_hs      (dvi0_rgb_hs ),    
-        .I_rgb_de      (dvi0_rgb_de ), 
-        .I_rgb_r       (dvi0_rgb_r  ), 
-        .I_rgb_g       (dvi0_rgb_g  ),  
-        .I_rgb_b       (dvi0_rgb_b  ),  
+
+        //CMOS
+        .I_rgb_clk      (video_clk          ),  //pixel clock
+        .I_rgb_vs       (video_vsync        ), 
+        .I_rgb_hs       (video_href         ),    
+        .I_rgb_de       (video_de           ), 
+        .I_rgb_r        (video_data[16+:8]  ),  //tp0_data_r
+        .I_rgb_g        (video_data[ 8+:8]  ),  
+        .I_rgb_b        (video_data[ 0+:8]  ),  
 
         .O_tmds_clk_p  (tmds_clk_p_0  ),
         .O_tmds_clk_n  (tmds_clk_n_0  ),
-        .O_tmds_data_p (tmds_d_p_0    ),
+        .O_tmds_data_p (tmds_d_p_0    ),  //{r,g,b}
         .O_tmds_data_n (tmds_d_n_0    )
     );
+
+
+//    DVI_TX_Top DVI_TX_Top_inst1
+//    (
+//        .I_rst_n       (hdmi4_rst_n   ),  //asynchronous reset, low active
+//        .I_serial_clk  (serial_clk    ),
+
+//        CMOS
+//        .I_rgb_clk     (dvi1_rgb_clk),  //pixel clock
+//        .I_rgb_vs      (dvi1_rgb_vs ), 
+//        .I_rgb_hs      (dvi1_rgb_hs ),    
+//        .I_rgb_de      (dvi1_rgb_de ), 
+//        .I_rgb_r       (dvi1_rgb_r  ),  //tp0_data_r
+//        .I_rgb_g       (dvi1_rgb_g  ),  
+//        .I_rgb_b       (dvi1_rgb_b  ),  
+
+//        .O_tmds_clk_p  (tmds_clk_p_1  ),
+//        .O_tmds_clk_n  (tmds_clk_n_1  ),
+//        .O_tmds_data_p (tmds_d_p_1    ),  //{r,g,b}
+//        .O_tmds_data_n (tmds_d_n_1    )
+//    );
+
 
 endmodule
